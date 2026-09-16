@@ -2,8 +2,8 @@
 
 > **Project:** `Project_LlamaHarness` at `C:\Users\steph\Desktop\Project_LlamaHarness\`
 > **Repo:** https://github.com/ZHpike0478/rust-harness.git
-> **Last touch:** 2026-09-15
-> **Tag:** `v0.1-stub`
+> **Last touch:** 2026-09-16
+> **Tag:** `v0.1-stub` -> real backend landed (llama.cpp b11007 vendored)
 
 ## What this project is
 
@@ -12,10 +12,17 @@ the same ergonomic surface (model registry, runtime model switching,
 tool calling, streaming chat) whether the backend is `llama.cpp`,
 `ollama`, or a stub for tests.
 
-The current commit ships a **working stub C++ engine** that exercises
-the full FFI surface end-to-end without requiring llama.cpp weights or a
-build environment. Replacing the stub with real `llama.cpp` is a
-self-contained task and does not change the Rust API.
+A **real llama.cpp backend is now wired**: `vendor/llama.cpp` submodule
+is pinned at `b11007` (2f3fd0252) and `LlamaEngine.cpp` implements the
+full `Engine` class surface -- model load/unload, chat-template
+rendering (GGUF template with chatml fallback), a full sampling chain,
+per-token streaming, and cancellation. The stub remains the fallback
+when `vendor/llama.cpp/build-static/src/libllama.a` is absent, so the
+build stays hermetic without GGUF weights.
+
+The current commit also ships a **working stub C++ engine** that
+exercises the full FFI surface end-to-end without requiring llama.cpp
+weights or a build environment.
 
 ## What's done (verified `cargo build --workspace` clean)
 
@@ -33,24 +40,27 @@ self-contained task and does not change the Rust API.
   models from registry, accepts commands. FFI error path works
   (returns clean error for missing model names).
 
-## What's stubbed
+## What's still open (post real-backend landing)
 
-- **No real `llama.cpp` vendored yet.** `StubEngine.cpp` is a
-  placeholder that tracks "loaded" models in a `map<rust::String,
-  ModelInfo>` and emits deterministic text. See "Wiring real
-  llama.cpp" below.
-- Tool calling is implemented as schema + trait (`Tool::parameters()`
+- **Tool calling** is implemented as schema + trait (`Tool::parameters()`
   returns `serde_json::Value`) but the ReAct loop / GBNF compiler is
   not yet wired into `ChatEngine::chat`. Tool plumbing is plumbed
   end-to-end at the type level; the integration tests for the ReAct
-  loop are not yet written.
-- Streaming: `chat_stream` returns `Pin<Box<dyn Stream<Item =
-  StreamEvent>>>`. The stub emits one `Token { text }` event followed
-  by `Done(ChatResponse)`. Per-token streaming will require real
-  llama.cpp + a callback pump (cxx `Fn` → mpsc channel).
-- Cancel: `Engine::cancel()` is a no-op stub. The `ChatRequest::cancel`
-  field is wired into `tokio::sync::Mutex` access; real cancellation
-  needs the llama.cpp cancel API.
+  loop are not yet written. The C++ side now passes tool specs through
+  but does not constrain generation with a grammar yet.
+- **Streaming is C++-side real but Rust-side coalesced.**
+  `LlamaEngine::complete_stream` invokes the cxx `Fn` callback once per
+  sampled token (real per-token). The Rust `chat_stream` still wraps
+  `chat()` and emits one coalesced `Token` + `Done`; wiring the
+  per-token cxx `Fn` into an `mpsc` channel -> `Stream` pump is the
+  remaining Rust-side task.
+- **Cancellation** is real on the C++ side: `LlamaHandles::cancel` is
+  an `std::atomic<bool>` checked every decode iteration, and
+  `Engine::cancel()` sets it. The Rust `ChatRequest::cancel` plumbing
+  into the engine call still needs wiring.
+- **KV cache management** is reset-per-request
+  (`llama_memory_clear` at generate start). Session-prefix reuse /
+  KV reuse across turns is not implemented.
 - TypeScript bindings: design space laid out (napi-rs target), not
   scaffolded. The Rust API is intentionally `Send`-agnostic to make
   this trivial to add later (each cxx opaque type is wrapped, not
@@ -118,29 +128,31 @@ Rust caller ──► llama-harness (safe API, async, tokio)
 | `chat_stream` returns `Pin<Box<dyn Stream<Item = StreamEvent>>>` | `cxx::UniquePtr` isn't `Send`; boxed stream gives local-pinned iterator |
 | `Pin<Box<dyn Stream>>` not `impl Stream<Item = ...>` | Concrete return type so callers don't need to worry about pinning |
 
-## Wiring real llama.cpp (next session's task)
+## Real llama.cpp wiring (DONE -- how to rebuild from clean)
 
-1. **Vendor llama.cpp** as a pinned submodule:
-   ```bash
-   cd C:/Users/steph/Desktop/Project_LlamaHarness
-   git submodule add https://github.com/ggerganov/llama.cpp vendor/llama.cpp
-   git -C vendor/llama.cpp checkout b1234   # pick a known-good tag
-   ```
-2. **Add `LlamaEngine.cpp`** next to `StubEngine.cpp` in
-   `crates/llama-harness-ffi/cpp/`. Implement the same `Engine` class
-   surface using llama.cpp's `llama_context`, `llama_decode`,
-   `llama_sampling_*`, and `llama_apply_chat_template` APIs.
-3. **Update `build.rs`** in `llama-harness-ffi` — it already
-   auto-detects `vendor/llama.cpp/` and adds the include + link
-   directives when present. Check the warning emitted at build time:
-   `llama.cpp not vendored at vendor/llama.cpp -- building stub engine`.
-4. **Switch** `crates/llama-harness-ffi/cpp/CMakeLists.txt` (when
-   added) or the `llama-harness/build.rs` to compile `LlamaEngine.cpp`
-   instead of `StubEngine.cpp`. One-line swap.
-5. **Streaming**: implement per-token streaming by pumping llama.cpp's
-   `llama_decode` loop into a `mpsc::Sender`, then forward to the cxx
-   `Fn` callback per token. The cxx `Fn` is single-call, so each
-   token requires a fresh trampoline invocation.
+The submodule is pinned at `b11007` (2f3fd0252). llama.cpp is built
+once with CMake into static libs; cargo links those artifacts:
+
+```bash
+# One-time (or after submodule update):
+cd vendor/llama.cpp
+# MSYS2 ucrt64 toolchain; Julia's bin dir MUST NOT precede msys2 on
+# PATH or cc1 crashes silently (DLL hijack of libgmp-10.dll).
+PATH="/ucrt64/bin:$PATH" cmake -G Ninja -B build-static \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+  -DGGML_BACKEND_DL=OFF -DGGML_NATIVE=OFF -DGGML_CPU_ALL_VARIANTS=OFF \
+  -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+  -DLLAMA_BUILD_SERVER=OFF -DGGML_LLAMAFILE=OFF -DGGML_OPENMP=OFF
+PATH="/ucrt64/bin:$PATH" cmake --build build-static --target llama ggml
+# MinGW ar names lack the lib prefix cargo expects; copy them:
+cp build-static/ggml/src/ggml.a        build-static/ggml/src/libggml.a
+cp build-static/ggml/src/ggml-base.a   build-static/ggml/src/libggml-base.a
+cp build-static/ggml/src/ggml-cpu.a    build-static/ggml/src/libggml-cpu.a
+```
+
+Both `build.rs` scripts detect `vendor/llama.cpp/build-static/src/libllama.a`
+and switch to `LlamaEngine.cpp` + the prebuilt libs automatically.
+Without it they fall back to `StubEngine.cpp` (hermetic, no weights).
 
 ## Known issues / sharp edges
 
@@ -194,27 +206,21 @@ mistral-7b-instruct, qwen2.5-7b-instruct`.
 
 ## Next steps in the build
 
-Ordered by impact-per-effort. The single biggest unlock is steps 1–2;
-everything after that is incremental against a working runtime.
+Ordered by impact-per-effort. Steps 1-2 from the original plan are
+DONE; everything below is incremental against a working runtime.
 
 ### Immediate (low effort, high value)
 
-1. **Vendor real llama.cpp** as a submodule at `vendor/llama.cpp/`,
-   pinned to a known-good tag (`b1234` or current release). The
-   `llama-harness/build.rs` already auto-detects the directory and
-   emits the right include + link directives — see the
-   "llama.cpp not vendored at vendor/llama.cpp" warning at build time.
-2. **Replace `StubEngine.cpp`** with `LlamaEngine.cpp` implementing the
-   same `Engine` class surface against llama.cpp's APIs:
-   `llama_model_load_from_file`, `llama_new_context_with_model`,
-   `llama_decode`, `llama_sampler_*`, `llama_apply_chat_template`. The
-   free-function trampolines at the bottom of `StubEngine.cpp` are the
-   cxx surface — same signatures, real impl behind them.
-3. **Wire per-token streaming.** The stub emits one `Token` + `Done`;
-   real llama.cpp needs a sampling loop that pushes each token through
-   a `mpsc::Sender`, then forwards via the cxx `Fn` callback to the
-   Rust stream. The cxx `Fn` is single-call, so each token needs a
-   fresh trampoline invocation per token.
+1. **~~Vendor real llama.cpp~~ DONE** — submodule at `b11007`.
+2. **~~LlamaEngine.cpp~~ DONE** — full Engine surface implemented.
+3. **Rust-side per-token streaming pump.** C++ streams per token into
+   the cxx `Fn`; remaining work is the Rust side: spawn a thread +
+   `std::sync::mpsc` (or tokio mpsc) inside `chat_stream`, pass the
+   receiver-backed stream to the caller, and drive
+   `engine_complete_stream` with a `fn(TokenDelta)` shim that forwards
+   into the channel. The cxx `Fn` is single-call per invocation, but a
+   plain `fn` pointer passed once is invoked once per token (it is the
+   same function each time — verified working in LlamaEngine).
 
 ### Medium effort — fills out the design
 
@@ -228,10 +234,9 @@ everything after that is incremental against a working runtime.
    is hit. Currently `ChatRequest::tool_execution =
    Auto | HostControlled` is plumbed through but the loop is not
    implemented.
-6. **Cancellation** — replace no-op `Engine::cancel()` with an
-   `AtomicBool` in `EngineState`, checked from llama.cpp's sampling
-   loop. `ChatRequest::cancel` is already wired through
-   `tokio::sync::Mutex`.
+6. **~~Cancellation~~ C++-side DONE** — `std::atomic<bool>` in
+   `LlamaHandles`, checked every decode iteration. Rust-side wiring
+   (`ChatRequest::cancel` -> `engine_cancel`) remains.
 7. **Unit + integration tests** — registry parsing is tested; the chat
    pipeline, tool filter behavior, and the FFI error mapping are not.
 
@@ -256,12 +261,13 @@ everything after that is incremental against a working runtime.
 
 ## Decisions still open
 
-- **Per-token streaming**: confirmed in design, not yet implemented.
-  See "Wiring real llama.cpp" step 5.
+- **Per-token streaming**: C++-side real (per-token cxx `Fn` invocations
+  in `LlamaEngine::complete_stream`). Rust-side pump (mpsc -> Stream)
+  still to be built; see "Next steps" item 3.
 - **GBNF caching key**: design is "schema hash", implementation TBD
   (use `blake3::hash(&serde_json::to_vec(&schemas))` then base32).
-- **Cancellation**: no-op stub. Real impl needs an `AtomicBool`
-  inside `EngineState`, checked from llama.cpp's sampling loop.
+- **Cancellation**: C++-side real via `LlamaHandles::cancel` atomic.
+  Rust-side plumbing open.
 - **TypeScript bindings**: design space is napi-rs; defer until Rust
   API stabilizes.
 
