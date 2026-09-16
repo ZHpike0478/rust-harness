@@ -1,0 +1,23 @@
+target/
+**/target/
+*.swp
+.DS_Store
+.idea/
+.vscode/
+
+# llama.cpp build artifacts
+crates/llama-harness-ffi/vendor/
+crates/llama-harness-ffi/build/llama.cpp/
+crates/llama-harness-ffi/build/out/
+*.dll
+*.so
+*.dylib
+
+# Local model files
+models/*.gguf
+models/*.bin
+models/*.safetensors
+
+# Registry is checked in; downloaded blobs are not
+registry/blobs/
+registry/cache/

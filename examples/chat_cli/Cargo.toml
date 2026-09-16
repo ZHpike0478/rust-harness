@@ -1,0 +1,21 @@
+[package]
+name        = "chat_cli"
+version.workspace = true
+edition.workspace = true
+publish     = false
+
+[[bin]]
+name = "chat_cli"
+path = "src/main.rs"
+
+[dependencies]
+llama-harness = { workspace = true }
+tokio         = { workspace = true }
+clap          = { workspace = true }
+rustyline     = { workspace = true }
+anyhow        = { workspace = true }
+tracing       = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures       = { workspace = true }
+
+[build-dependencies]

@@ -1,0 +1,42 @@
+# Example models.toml for llama-harness.
+#
+# Each model lives under [models."<registry-name>"]. The TOML key is
+# quoted so dots in model names (like llama-3.1) are not interpreted as
+# table nesting. The `name` field must match the table key.
+#
+# Used by: `chat_cli --registry path/to/this.toml`.
+
+[models."llama-3.1-8b-instruct"]
+name                = "llama-3.1-8b-instruct"
+type                = "local"
+path                = "C:/models/Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf"
+family              = "llama-3"
+alias               = "llama8b"
+context             = 4096
+gpu_layers          = 0
+chat_template_name  = "llama-3"
+
+[models."mistral-7b-instruct"]
+name    = "mistral-7b-instruct"
+type    = "local"
+path    = "C:/models/mistral-7b-instruct-v0.3.Q5_K_M.gguf"
+family  = "mistral"
+alias   = "mistral7b"
+context = 4096
+
+[models."qwen2.5-7b-instruct"]
+name    = "qwen2.5-7b-instruct"
+type    = "local"
+path    = "C:/models/qwen2.5-7b-instruct-q5_k_m.gguf"
+family  = "qwen"
+alias   = "qwen7b"
+context = 4096
+
+# Defaults applied to all models unless overridden.
+[defaults]
+temperature     = 0.7
+top_p           = 0.9
+top_k           = 40
+min_p           = 0.05
+repeat_penalty  = 1.1
+max_tokens      = 1024

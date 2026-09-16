@@ -1,0 +1,20 @@
+[package]
+name        = "llama-harness-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+links       = "llama_harness_ffi"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+cxx = { version = "1.0" }
+
+[build-dependencies]
+cxx-build = { version = "1.0" }
+
+# Force rebuild when the C++ sources change
+[features]
+default = []

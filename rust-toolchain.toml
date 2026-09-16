@@ -1,0 +1,6 @@
+# Pin a known-good Rust toolchain. cxx + proc-macros + llama.cpp
+# all benefit from stable, predictable builds.
+[toolchain]
+channel = "stable"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

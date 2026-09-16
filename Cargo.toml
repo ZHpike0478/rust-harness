@@ -1,0 +1,65 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/llama-harness",
+    "crates/llama-harness-ffi",
+    "crates/llama-harness-macros",
+    "examples/chat_cli",
+    "examples/agent_demo",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+authors = ["steph"]
+version = "0.1.0"
+
+[workspace.dependencies]
+# Public surface
+llama-harness       = { path = "crates/llama-harness" }
+llama-harness-ffi   = { path = "crates/llama-harness-ffi" }
+llama-harness-macros = { path = "crates/llama-harness-macros" }
+
+# Async / runtime
+tokio       = { version = "1.40", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+async-trait = "0.1"
+futures     = "0.3"
+
+# Serialization
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml       = "0.8"
+schemars   = "0.8"          # JSON Schema for #[tool]
+indexmap   = { version = "2", features = ["serde"] }
+
+# Errors / logging
+thiserror   = "1.0"
+anyhow      = "1.0"
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# FFI bridge
+cxx        = "1.0"
+cxx-build  = "1.0"
+
+# CLI
+clap      = { version = "4", features = ["derive"] }
+rustyline = "14"
+dirs      = "5"
+
+# Misc
+uuid         = { version = "1", features = ["v4", "serde"] }
+parking_lot  = "0.12"
+sha2         = "0.10"
+hex          = "0.4"
+
+[profile.dev]
+opt-level = 1       # FFI boundary benefits from optimization even in dev
+debug = 1
+
+[profile.release]
+opt-level = 3
+lto       = "thin"
+codegen-units = 1
+strip     = "symbols"
