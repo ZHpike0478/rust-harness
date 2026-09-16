@@ -192,6 +192,68 @@ mistral-7b-instruct, qwen2.5-7b-instruct`.
 3. The README at `README.md` is the public-facing doc. Update it once
    real llama.cpp is wired.
 
+## Next steps in the build
+
+Ordered by impact-per-effort. The single biggest unlock is steps 1–2;
+everything after that is incremental against a working runtime.
+
+### Immediate (low effort, high value)
+
+1. **Vendor real llama.cpp** as a submodule at `vendor/llama.cpp/`,
+   pinned to a known-good tag (`b1234` or current release). The
+   `llama-harness/build.rs` already auto-detects the directory and
+   emits the right include + link directives — see the
+   "llama.cpp not vendored at vendor/llama.cpp" warning at build time.
+2. **Replace `StubEngine.cpp`** with `LlamaEngine.cpp` implementing the
+   same `Engine` class surface against llama.cpp's APIs:
+   `llama_model_load_from_file`, `llama_new_context_with_model`,
+   `llama_decode`, `llama_sampler_*`, `llama_apply_chat_template`. The
+   free-function trampolines at the bottom of `StubEngine.cpp` are the
+   cxx surface — same signatures, real impl behind them.
+3. **Wire per-token streaming.** The stub emits one `Token` + `Done`;
+   real llama.cpp needs a sampling loop that pushes each token through
+   a `mpsc::Sender`, then forwards via the cxx `Fn` callback to the
+   Rust stream. The cxx `Fn` is single-call, so each token needs a
+   fresh trampoline invocation per token.
+
+### Medium effort — fills out the design
+
+4. **GBNF grammar compiler** — generate constrained-output grammars
+   from live `ToolRegistry` schemas, cache by `blake3(schema_json)`.
+   Currently the plumbing is type-level only; the actual ReAct loop
+   in `ChatEngine::chat` reads `ToolRegistry` but doesn't drive
+   `complete()` with grammar-constrained sampling yet.
+5. **Tool ReAct loop** — auto-execute tool calls and feed results
+   back until the model emits a final answer or `max_tool_iterations`
+   is hit. Currently `ChatRequest::tool_execution =
+   Auto | HostControlled` is plumbed through but the loop is not
+   implemented.
+6. **Cancellation** — replace no-op `Engine::cancel()` with an
+   `AtomicBool` in `EngineState`, checked from llama.cpp's sampling
+   loop. `ChatRequest::cancel` is already wired through
+   `tokio::sync::Mutex`.
+7. **Unit + integration tests** — registry parsing is tested; the chat
+   pipeline, tool filter behavior, and the FFI error mapping are not.
+
+### Larger / optional
+
+8. **TypeScript bindings via napi-rs** — add
+   `crates/llama-harness-node/` wrapping the safe Rust API. The cxx
+   `UniquePtr` is intentionally not stored long-term, so this is
+   mostly a thin export layer.
+9. **KV cache / speculative decoding** — both stubbed in the
+   architecture diagram, neither implemented.
+10. **Per-family chat template coverage** —
+    `StubEngine::detect_chat_template` returns one of three strings;
+    needs full Llama-3 / Mistral / ChatML / ToolACE renderers.
+11. **CI** — `cargo build --workspace` on push, then
+    `cargo clippy --workspace -- -D warnings`, then
+    `cargo test --workspace`. The stub makes the build hermetic so CI
+    works without GPU.
+12. **Docs site** — README covers public API; internal `docs/` is
+    empty. Worth a `docs/ARCHITECTURE.md` (the diagram from the early
+    turn) and `docs/VENDORING.md` (the llama.cpp swap procedure).
+
 ## Decisions still open
 
 - **Per-token streaming**: confirmed in design, not yet implemented.
