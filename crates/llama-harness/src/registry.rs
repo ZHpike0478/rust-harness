@@ -163,15 +163,18 @@ impl ModelRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::ModelSpec;
 
     const SAMPLE: &str = r#"
-        [models.llama-3.1-8b-instruct]
+        [models."llama-3.1-8b-instruct"]
+        name = "llama-3.1-8b-instruct"
         type = "local"
         path = "C:/models/llama-3.1-8b.gguf"
         family = "llama-3.1"
         context = 8192
 
-        [models.qwen2.5-7b]
+        [models."qwen2.5-7b"]
+        name = "qwen2.5-7b"
         type = "local"
         path = "C:/models/qwen2.5-7b.gguf"
         family = "qwen2.5"

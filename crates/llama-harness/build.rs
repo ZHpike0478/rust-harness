@@ -25,31 +25,55 @@ fn main() {
 
     let mut build = cxx_build::bridge(ffi_dir.join("src").join("lib.rs"));
 
-    build
-        .file(cpp_dir.join("HarnessError.cpp"))
-        .file(cpp_dir.join("StubEngine.cpp"))
-        .include(&cpp_dir)
-        .include(&cxx_dto_dir)
-        .flag_if_supported("-std=c++17")
-        .flag_if_supported("/std:c++17")
-        .flag_if_supported("/EHsc")
-        .flag_if_supported("/utf-8")
-        .flag_if_supported("-Wno-unused-parameter")
-        .warnings(false);
+    let llama_dir = workspace_root.join("vendor").join("llama.cpp");
+    let llama_build = llama_dir.join("build-static");
+    let real_backend = llama_dir.exists()
+        && llama_build.join("src").join("libllama.a").exists();
 
-    // Optionally include llama.cpp when vendored.
-    let llama_dir = ffi_dir.join("vendor").join("llama.cpp");
-    if llama_dir.exists() {
-        let llama_inc = llama_dir.join("include");
-        let llama_src = llama_dir.join("ggml").join("src");
+    build.file(cpp_dir.join("HarnessError.cpp"));
+    build.include(&cpp_dir);
+    build.include(&cxx_dto_dir);
+
+    if real_backend {
         build
-            .include(&llama_inc)
-            .include(&llama_src)
+            .file(cpp_dir.join("LlamaEngine.cpp"))
+            .include(&llama_dir.join("include"))
+            .include(&llama_dir.join("ggml").join("include"))
+            .include(&llama_build.join("ggml").join("include"))
+            .include(&llama_build.join("src"))
+            .include(&llama_dir.join("src"))
+            .include(&llama_dir.join("ggml").join("src"))
             .define("LLAMA_HARNESS_REAL_BACKEND", None);
-        for entry in walkdir(&llama_src) {
-            if entry.extension().and_then(|s| s.to_str()) == Some("cpp") {
-                build.file(entry);
-            }
+        println!("cargo:rustc-link-search=native={}", llama_build.join("src").display());
+        println!("cargo:rustc-link-search=native={}", llama_build.join("ggml").join("src").display());
+        println!("cargo:rustc-link-lib=static=llama");
+        println!("cargo:rustc-link-lib=static=ggml");
+        println!("cargo:rustc-link-lib=static=ggml-base");
+        println!("cargo:rustc-link-lib=static=ggml-cpu");
+        #[cfg(target_os = "windows")]
+        {
+            println!("cargo:rustc-link-lib=advapi32");
+            println!("cargo:rustc-link-lib=user32");
+            println!("cargo:rustc-link-lib=bcrypt");
+        }
+        #[cfg(target_os = "linux")]
+        {
+            println!("cargo:rustc-link-lib=pthread");
+            println!("cargo:rustc-link-lib=m");
+            println!("cargo:rustc-link-lib=dl");
+        }
+        #[cfg(target_os = "macos")]
+        {
+            println!("cargo:rustc-link-lib=c++");
+            println!("cargo:rustc-link-lib=framework=Accelerate");
+        }
+    } else {
+        build.file(cpp_dir.join("StubEngine.cpp"));
+        if llama_dir.exists() {
+            println!(
+                "cargo:warning=llama.cpp vendored but build-static missing -- \
+                 build with cmake first; using stub engine"
+            );
         }
     }
 

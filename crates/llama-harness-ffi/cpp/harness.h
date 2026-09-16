@@ -140,6 +140,13 @@ public:
     std::string model_family(const std::string& id) const;
 
     std::shared_ptr<EngineState> state;
+
+    // ----- LlamaEngine access to its per-engine handle registry -----
+    // Defined in LlamaEngine.cpp; returns the llama.cpp handles map
+    // keyed by model id. No-op / aborts when the stub backend is
+    // compiled instead (guarded by LLAMA_HARNESS_REAL_BACKEND).
+    struct LlamaHandles;
+    LlamaHandles & handles_mutable();
 };
 
 // ----- Free function exported to cxx --------------------------------
